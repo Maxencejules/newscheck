@@ -265,7 +265,7 @@ func Run() error {
 			u := candidates[i].URL
 			fmt.Printf("\n[%d/%d] Extracting: %s\n", i+1, n, u)
 
-			art, err := worker.Extract(ctx, u)
+			art, err := worker.Extract(ctx, u, input.PivotLang)
 			if err != nil {
 				fmt.Println("  - error:", err)
 				continue
