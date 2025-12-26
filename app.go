@@ -36,7 +36,9 @@ func (a *App) startup(ctx context.Context) {
 // SearchParams exposed to frontend
 type SearchParams struct {
 	Query         string `json:"query"`
-	Days          int    `json:"days"` // 1, 7, 30
+	Days          int    `json:"days"` // 1, 7, 30, or -1 (Custom)
+	CustomFrom    string `json:"customFrom"` // YYYY-MM-DD
+	CustomTo      string `json:"customTo"`   // YYYY-MM-DD
 	Scope         int    `json:"scope"` // 0=Auto, 1=Chosen, 2=Global
 	ChosenCountry string `json:"chosenCountry"`
 	PivotLang     string `json:"pivotLang"`
@@ -48,10 +50,29 @@ func (a *App) Search(p SearchParams) (*app.SearchResult, error) {
 		return nil, fmt.Errorf("backend service not initialized")
 	}
 
-	to := time.Now()
-	from := to.AddDate(0, 0, -p.Days)
-	if p.Days == 1 {
-		from = to.Add(-24 * time.Hour)
+	var from, to time.Time
+
+	if p.Days == -1 {
+		// Custom range
+		var err error
+		from, err = time.Parse("2006-01-02", p.CustomFrom)
+		if err != nil {
+			return nil, fmt.Errorf("invalid custom from date: %w", err)
+		}
+		to, err = time.Parse("2006-01-02", p.CustomTo)
+		if err != nil {
+			return nil, fmt.Errorf("invalid custom to date: %w", err)
+		}
+		// Adjust 'to' to end of day if it's just a date, or keep as is.
+		// Usually discovery works better if 'to' is inclusive of the day.
+		to = to.Add(23*time.Hour + 59*time.Minute)
+	} else {
+		// Standard ranges
+		to = time.Now()
+		from = to.AddDate(0, 0, -p.Days)
+		if p.Days == 1 {
+			from = to.Add(-24 * time.Hour)
+		}
 	}
 
 	req := app.SearchRequest{
