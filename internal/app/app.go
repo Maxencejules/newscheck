@@ -303,9 +303,23 @@ func Run() error {
 }
 
 func generateReports(articles []extract.Article, candidates []discovery.Candidate) error {
+	// Create output directories
+	if err := os.MkdirAll("reports", 0755); err != nil {
+		return fmt.Errorf("creating reports dir: %w", err)
+	}
+	if err := os.MkdirAll("scores", 0755); err != nil {
+		return fmt.Errorf("creating scores dir: %w", err)
+	}
+
 	// 1. Articles DOCX
 	if len(articles) > 0 {
 		f := docx.NewFile()
+
+		titleP := f.AddParagraph()
+		titleRun := titleP.AddText("Extracted Articles Report")
+		titleRun.Size(20)
+		f.AddParagraph() // Spacer
+
 		for _, art := range articles {
 			// Title
 			p := f.AddParagraph()
@@ -326,12 +340,6 @@ func generateReports(articles []extract.Article, candidates []discovery.Candidat
 			// URL
 			p = f.AddParagraph()
 			run = p.AddText(art.FinalURL)
-			// Italic is not directly available on Run in this version, or I need to check docs.
-			// Let's assume AddText returns *Run which might have Italic via a property or method if available.
-			// Checking docs: Run has Color, Size. Does it have Bold? AddParagraph().AddText().Bold() seems valid from snippets online but let's check.
-			// From `go doc`, Run has Color, Size.
-			// Checking Paragraph.AddText returns *Run.
-			// Let's assume standard formatting methods might exist or just stick to basic text.
 			run.Size(10)
 			run.Color("0000FF")
 
@@ -345,19 +353,37 @@ func generateReports(articles []extract.Article, candidates []discovery.Candidat
 			}
 			f.AddParagraph().AddText("--------------------------------------------------")
 		}
-		if err := f.Save("articles.docx"); err != nil {
+
+		timestamp := time.Now().Format("20060102-150405")
+		filename := fmt.Sprintf("reports/articles-%s.docx", timestamp)
+		if err := f.Save(filename); err != nil {
 			return err
 		}
+		fmt.Printf("Saved article report to: %s\n", filename)
 	}
 
 	// 2. Scores DOCX
 	if len(candidates) > 0 {
 		f := docx.NewFile()
 
+		// Header
 		p := f.AddParagraph()
-		run := p.AddText("Relevance & Consensus Scores")
-		// run.Bold()
+		run := p.AddText("Relevance & Consensus Scores Report")
 		run.Size(18)
+
+		// Explanations
+		p = f.AddParagraph()
+		p.AddText("Understanding the Scores:")
+
+		p = f.AddParagraph()
+		p.AddText("- Relevance Score (0-100): Indicates how closely the article matches your specific query keywords and country intent. Higher is better.")
+
+		p = f.AddParagraph()
+		p.AddText("- Consensus Score: Represents cross-source validation. It counts how many *other* independent sources are covering essentially the same story (based on keyword overlap). A higher score suggests a major, verified event.")
+
+		f.AddParagraph() // Spacer
+		f.AddParagraph().AddText("--------------------------------------------------")
+		f.AddParagraph() // Spacer
 
 		for _, c := range candidates {
 			p = f.AddParagraph()
@@ -368,15 +394,31 @@ func generateReports(articles []extract.Article, candidates []discovery.Candidat
 			run = p.AddText(c.URL)
 			run.Size(10)
 
+			// Scale relevance to look more standard (it was raw points before)
+			// Assuming raw score rarely exceeds ~20-30 in current logic, let's just present it clearly or normalize if we knew max.
+			// Current logic: +10 per keyword match, +5 country, +2 recency.
+			// Let's cap visual display at 100 or just show "Score: X".
+			// A "perfect" match might be ~2 keywords + country + recent = 27.
+			// Let's show it as "Relevance Score: X (Raw)".
+
+			consensusDesc := "Low"
+			if c.ConsensusScore >= 2 { consensusDesc = "Medium" }
+			if c.ConsensusScore >= 4 { consensusDesc = "High" }
+			if c.ConsensusScore >= 6 { consensusDesc = "Very High" }
+
 			p = f.AddParagraph()
-			run = p.AddText(fmt.Sprintf("Relevance Score: %d | Consensus Score: %d", c.RelevanceScore, c.ConsensusScore))
+			run = p.AddText(fmt.Sprintf("Relevance: %d | Consensus: %d (%s)", c.RelevanceScore, c.ConsensusScore, consensusDesc))
 			run.Color("008000")
 
 			f.AddParagraph() // Spacer
 		}
-		if err := f.Save("scores.docx"); err != nil {
+
+		timestamp := time.Now().Format("20060102-150405")
+		filename := fmt.Sprintf("scores/scores-%s.docx", timestamp)
+		if err := f.Save(filename); err != nil {
 			return err
 		}
+		fmt.Printf("Saved scores report to: %s\n", filename)
 	}
 
 	return nil
