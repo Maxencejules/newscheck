@@ -121,10 +121,14 @@ func (g *GoogleNews) Discover(ctx context.Context, p Plan, lang LanguageProfile,
 		publisherURL := extractPublisherURL(it, googleURL)
 
 		// Skip if we couldn't resolve to a real article URL
-		// (Don't use Google News wrapper URLs as they can't be easily unwrapped)
+		// If we can't unwrap it here, pass the wrapper URL to the worker which can handle redirects/unwrapping
 		if publisherURL == "" {
-			skipped++
-			continue
+			if isGoogleNewsWrapper(googleURL) {
+				publisherURL = googleURL
+			} else {
+				skipped++
+				continue
+			}
 		}
 
 		out = append(out, Candidate{
@@ -142,6 +146,20 @@ func (g *GoogleNews) Discover(ctx context.Context, p Plan, lang LanguageProfile,
 	}
 
 	return out, nil
+}
+
+// isGoogleNewsWrapper checks if the URL is a Google News wrapper that needs resolution
+func isGoogleNewsWrapper(u string) bool {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Host)
+	if host != "news.google.com" && host != "google.com" && host != "www.google.com" {
+		return false
+	}
+	// Check for article paths
+	return strings.Contains(parsed.Path, "/rss/articles/") || strings.Contains(parsed.Path, "/articles/")
 }
 
 // extractPublisherURL tries multiple strategies to find the real article URL
