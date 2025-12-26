@@ -6,74 +6,112 @@ import (
 	"unicode"
 )
 
-// Heuristic: detect likely country phrases from user query.
-// We avoid calling the API for random words.
 var (
-	reMultiSpace  = regexp.MustCompile(`\s+`)
-	reWordLike    = regexp.MustCompile(`[\pL]{3,}`) // at least one real word token
-	reBadAllPunct = regexp.MustCompile(`^[\d\pP\pS\s]+$`)
+	reToken = regexp.MustCompile(`[\pL\pM][\pL\pM'\-]{1,}`) // word-ish tokens
 )
 
-func LooksResolvableCountryQuery(q string) bool {
+// ExtractCountryHints tries to pull likely country name candidates from a query.
+// Example: "Madagascar elections" -> ["Madagascar"]
+// Example: "latest political developments in South Africa" -> ["South Africa"]
+func ExtractCountryHints(q string) []string {
 	q = strings.TrimSpace(q)
 	if q == "" {
-		return false
-	}
-	if reBadAllPunct.MatchString(q) {
-		return false
-	}
-	if !reWordLike.MatchString(q) {
-		return false
+		return nil
 	}
 
-	// If the query has at least one capitalized token OR contains common country markers, we’ll allow API attempt.
-	// (Works well for “Madagascar elections”, “Hungary politics”, etc.)
-	if hasCapitalizedToken(q) {
-		return true
+	// Strategy:
+	// - Prefer sequences of Capitalized words: "South Africa", "United Kingdom"
+	// - Otherwise fall back to the first long token
+
+	// Tokenize (preserve original casing)
+	rawTokens := reToken.FindAllString(q, -1)
+	if len(rawTokens) == 0 {
+		return nil
 	}
 
-	l := strings.ToLower(q)
-	if strings.Contains(l, " in ") || strings.Contains(l, " from ") || strings.Contains(l, " for ") {
-		return true
+	type span struct {
+		start int
+		end   int
+	}
+	spans := []span{}
+
+	// Build spans of consecutive capitalized tokens
+	i := 0
+	for i < len(rawTokens) {
+		if isCapWord(rawTokens[i]) {
+			j := i + 1
+			for j < len(rawTokens) && isCapWord(rawTokens[j]) {
+				j++
+			}
+			// span i..j-1
+			if j-i >= 1 {
+				spans = append(spans, span{start: i, end: j})
+			}
+			i = j
+		} else {
+			i++
+		}
 	}
 
-	// As fallback, allow if query is short-ish (user likely typed “Country + topic”)
-	compact := reMultiSpace.ReplaceAllString(q, " ")
-	if len([]rune(compact)) <= 40 {
-		return true
+	candidates := []string{}
+	seen := map[string]struct{}{}
+
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		key := strings.ToLower(s)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		candidates = append(candidates, s)
 	}
-	return false
+
+	// Add longest spans first ("South Africa" before "Africa")
+	// (simple: iterate spans and add multi-word first)
+	for _, sp := range spans {
+		if sp.end-sp.start >= 2 {
+			add(strings.Join(rawTokens[sp.start:sp.end], " "))
+		}
+	}
+	for _, sp := range spans {
+		if sp.end-sp.start == 1 {
+			add(rawTokens[sp.start])
+		}
+	}
+
+	// Fallback: first long token (>=4 letters)
+	if len(candidates) == 0 {
+		for _, t := range rawTokens {
+			if len([]rune(t)) >= 4 {
+				add(t)
+				break
+			}
+		}
+	}
+
+	// Keep top few
+	if len(candidates) > 3 {
+		candidates = candidates[:3]
+	}
+	return candidates
 }
 
-func hasCapitalizedToken(s string) bool {
-	// Very simple: any token that starts with an uppercase letter and has >=3 letters
-	toks := strings.Fields(s)
-	for _, t := range toks {
-		r := []rune(t)
-		if len(r) < 3 {
-			continue
-		}
-		// strip punctuation around token
-		t = strings.TrimFunc(t, func(r rune) bool {
-			return unicode.IsPunct(r) || unicode.IsSymbol(r)
-		})
-		r = []rune(t)
-		if len(r) < 3 {
-			continue
-		}
-		if unicode.IsUpper(r[0]) {
-			// ensure it has letters
-			hasLetter := false
-			for _, x := range r {
-				if unicode.IsLetter(x) {
-					hasLetter = true
-					break
-				}
-			}
-			if hasLetter {
-				return true
-			}
-		}
+func isCapWord(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
 	}
-	return false
+	r := []rune(s)
+	// skip leading punctuation
+	k := 0
+	for k < len(r) && (unicode.IsPunct(r[k]) || unicode.IsSymbol(r[k])) {
+		k++
+	}
+	if k >= len(r) {
+		return false
+	}
+	return unicode.IsUpper(r[k])
 }

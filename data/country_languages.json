@@ -1,0 +1,5 @@
+{
+  "United States": { "iso2": "US", "languages": ["en"], "aliases": ["USA", "United States of America"] },
+  "Canada": { "iso2": "CA", "languages": ["en", "fr"], "aliases": ["Canadian Confederation"] },
+  "Mexico": { "iso2": "MX", "languages": ["es"], "aliases": ["México", "Estados Unidos Mexicanos"] }
+}
