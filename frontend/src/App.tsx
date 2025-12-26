@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import './fonts.css';
 import './App.css';
 
 // Define types manually since we can't auto-generate in this env
@@ -38,6 +39,17 @@ interface ExtractResult {
 
 // Access Wails runtime
 const wails = (window as any).go.main.App;
+
+// Icons (Simple SVGs)
+const Icons = {
+    Search: () => <svg className="icon" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>,
+    Back: () => <svg className="icon" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>,
+    Download: () => <svg className="icon" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>,
+    Globe: () => <svg className="icon" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>,
+    Clock: () => <svg className="icon" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>,
+    Filter: () => <svg className="icon" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>,
+    News: () => <svg className="icon" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" /></svg>,
+};
 
 function App() {
     // Search State
@@ -151,10 +163,14 @@ function App() {
     return (
         <div className="container">
             <header>
-                <h1 onClick={goHome} style={{cursor: 'pointer'}}>NewsCheck</h1>
+                <h1 onClick={goHome} style={{cursor: 'pointer'}}>
+                    <Icons.Globe /> NewsCheck
+                </h1>
                 {loading && <div className="loader">Processing...</div>}
                 {error && <div className="error">{error}</div>}
             </header>
+
+            {error && <div className="error">{error}</div>}
 
             {view === "search" && (
                 <div className="card">
@@ -166,12 +182,13 @@ function App() {
                             onChange={e => setQuery(e.target.value)}
                             placeholder="e.g. Artificial Intelligence Regulation in EU"
                             rows={3}
+                            autoFocus
                         />
                     </div>
 
                     <div className="row">
                         <div className="form-group">
-                            <label>Time Range</label>
+                            <label><Icons.Clock /> Time Range</label>
                             <select value={days} onChange={e => setDays(Number(e.target.value))}>
                                 <option value={1}>Last 24 Hours</option>
                                 <option value={7}>Last 7 Days</option>
@@ -188,7 +205,7 @@ function App() {
                     </div>
 
                     <div className="form-group">
-                        <label>Scope</label>
+                        <label><Icons.Filter /> Scope</label>
                         <select value={scope} onChange={e => setScope(Number(e.target.value))}>
                             <option value={0}>Auto-Detect</option>
                             <option value={1}>Specific Country</option>
@@ -216,11 +233,11 @@ function App() {
                             onChange={e => setApiKey(e.target.value)}
                             placeholder="AIzaSy..."
                         />
-                        <small style={{color: '#777'}}>Leave empty to use local summarization (Sumy)</small>
+                        <small>Leave empty to use local summarization (Sumy)</small>
                     </div>
 
-                    <button className="btn primary" onClick={handleSearch} disabled={loading || !query}>
-                        Start Discovery
+                    <button className="btn primary full-width" onClick={handleSearch} disabled={loading || !query}>
+                        <Icons.Search /> Start Discovery
                     </button>
                 </div>
             )}
@@ -228,10 +245,18 @@ function App() {
             {view === "results" && (
                 <div className="results-view">
                     <div className="toolbar">
-                        <button onClick={goHome}>&larr; Back</button>
-                        <span>Found {candidates.length} candidates</span>
-                        <div className="actions">
-                            <button className="btn" onClick={() => wails.SaveScoresReport(candidates)}>Save Scores DOCX</button>
+                        <div style={{display:'flex', gap:'1rem', alignItems:'center'}}>
+                            <button className="btn" onClick={goHome}><Icons.Back /> Back</button>
+                            <span>Found {candidates.length} candidates</span>
+                            <div style={{display:'flex', gap:'0.5rem', marginLeft:'1rem', borderLeft:'1px solid #eee', paddingLeft:'1rem'}}>
+                                <button className="btn small" onClick={handleSelectAll}>Select All</button>
+                                <button className="btn small" onClick={handleClearSelection}>Clear</button>
+                            </div>
+                        </div>
+                        <div className="actions" style={{display:'flex', gap:'0.5rem'}}>
+                            <button className="btn" onClick={() => wails.SaveScoresReport(candidates)}>
+                                <Icons.Download /> Save Scores
+                            </button>
                             <button
                                 className="btn primary"
                                 onClick={handleExtract}
@@ -255,9 +280,9 @@ function App() {
                                 <div className="content">
                                     <h3>{c.title}</h3>
                                     <div className="meta">
-                                        <span>{c.source}</span>
+                                        <span><Icons.News /> {c.source}</span>
                                         <span>{new Date(c.published_at).toLocaleDateString()}</span>
-                                        <span className="badge">Rel: {c.relevance_score}</span>
+                                        <span className="badge rel">Rel: {c.relevance_score}</span>
                                         {c.consensus_score > 1 && <span className="badge consensus">Consensus: {c.consensus_score}</span>}
                                     </div>
                                     <div className="url">{c.url}</div>
@@ -271,16 +296,18 @@ function App() {
             {view === "extracted" && extractResult && (
                 <div className="extracted-view">
                     <div className="toolbar">
-                        <button onClick={() => setView("results")}>&larr; Back to Results</button>
-                        <div className="actions">
-                            <button className="btn" onClick={saveArticles}>Save Articles DOCX</button>
-                            <button className="btn primary" onClick={saveResume}>Save Resume DOCX</button>
+                        <button className="btn" onClick={() => setView("results")}><Icons.Back /> Back to Results</button>
+                        <div className="actions" style={{display:'flex', gap:'0.5rem'}}>
+                            <button className="btn" onClick={saveArticles}><Icons.Download /> Save Articles</button>
+                            <button className="btn primary" onClick={saveResume}><Icons.Download /> Save Resume</button>
                         </div>
                     </div>
 
                     <div className="split-view">
                         <div className="summary-panel">
-                            <h2>Global Intelligence Resume</h2>
+                            <div className="panel-header">
+                                <h2>Global Intelligence Resume</h2>
+                            </div>
                             <div className="summary-content">
                                 {extractResult.summary.split('\n').map((line, i) => (
                                     <p key={i}>{line}</p>
@@ -288,7 +315,9 @@ function App() {
                             </div>
                         </div>
                         <div className="articles-panel">
-                            <h2>Extracted Articles ({extractResult.articles.length})</h2>
+                            <div className="panel-header">
+                                <h2>Extracted Articles ({extractResult.articles.length})</h2>
+                            </div>
                             {extractResult.articles.map((art, i) => (
                                 <div key={i} className="article-card">
                                     <h3>{art.title}</h3>
