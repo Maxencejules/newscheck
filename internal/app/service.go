@@ -213,6 +213,51 @@ func (s *Service) GenerateArticleReport(path string, articles []extract.Article)
 	return f.Save(path)
 }
 
+func (s *Service) GenerateScoresReport(path string, candidates []discovery.Candidate) error {
+	f := docx.NewFile()
+
+	// Header
+	p := f.AddParagraph()
+	run := p.AddText("Relevance & Consensus Scores Report")
+	run.Size(18)
+
+	// Explanations
+	p = f.AddParagraph()
+	p.AddText("Understanding the Scores:")
+
+	p = f.AddParagraph()
+	p.AddText("- Relevance Score (0-100): Indicates how closely the article matches your specific query keywords and country intent. Higher is better.")
+
+	p = f.AddParagraph()
+	p.AddText("- Consensus Score: Represents cross-source validation. It counts how many *other* independent sources are covering essentially the same story (based on keyword overlap). A higher score suggests a major, verified event.")
+
+	f.AddParagraph() // Spacer
+	f.AddParagraph().AddText("--------------------------------------------------")
+	f.AddParagraph() // Spacer
+
+	for _, c := range candidates {
+		p = f.AddParagraph()
+		run = p.AddText(c.Title)
+
+		p = f.AddParagraph()
+		run = p.AddText(c.URL)
+		run.Size(10)
+
+		consensusDesc := "Low"
+		if c.ConsensusScore >= 2 { consensusDesc = "Medium" }
+		if c.ConsensusScore >= 4 { consensusDesc = "High" }
+		if c.ConsensusScore >= 6 { consensusDesc = "Very High" }
+
+		p = f.AddParagraph()
+		run = p.AddText(fmt.Sprintf("Relevance: %d | Consensus: %d (%s)", c.RelevanceScore, c.ConsensusScore, consensusDesc))
+		run.Color("008000")
+
+		f.AddParagraph() // Spacer
+	}
+
+	return f.Save(path)
+}
+
 func (s *Service) GenerateResumeReport(path string, summary string, query string, articles []extract.Article) error {
 	f := docx.NewFile()
 

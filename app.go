@@ -7,6 +7,7 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"newscheck/internal/app"
+	"newscheck/internal/discovery"
 	"newscheck/internal/extract"
 )
 
@@ -105,6 +106,28 @@ func (a *App) SaveArticleReport(articles []extract.Article) (string, error) {
 	}
 
 	err = a.service.GenerateArticleReport(path, articles)
+	if err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (a *App) SaveScoresReport(candidates []discovery.Candidate) (string, error) {
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		DefaultFilename: "scores_report.docx",
+		Title:           "Save Scores Report",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "Word Documents (*.docx)", Pattern: "*.docx"},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", nil // User cancelled
+	}
+
+	err = a.service.GenerateScoresReport(path, candidates)
 	if err != nil {
 		return "", err
 	}

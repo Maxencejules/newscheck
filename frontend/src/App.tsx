@@ -221,13 +221,16 @@ function App() {
                     <div className="toolbar">
                         <button onClick={goHome}>&larr; Back</button>
                         <span>Found {candidates.length} candidates</span>
-                        <button
-                            className="btn primary"
-                            onClick={handleExtract}
-                            disabled={selectedUrls.size === 0 || loading}
-                        >
-                            Extract ({selectedUrls.size})
-                        </button>
+                        <div className="actions">
+                            <button className="btn" onClick={() => wails.SaveScoresReport(candidates)}>Save Scores DOCX</button>
+                            <button
+                                className="btn primary"
+                                onClick={handleExtract}
+                                disabled={selectedUrls.size === 0 || loading}
+                            >
+                                Extract ({selectedUrls.size})
+                            </button>
+                        </div>
                     </div>
 
                     <div className="list">
