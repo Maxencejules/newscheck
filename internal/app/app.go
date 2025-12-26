@@ -297,6 +297,74 @@ func Run() error {
 		} else {
 			fmt.Println("Reports generated: articles.docx, scores.docx")
 		}
+
+		if len(extractedArticles) > 0 {
+			fmt.Println("\nGenerating coherent resume (Summary)...")
+			worker := extract.NewWorker()
+			if err := generateResume(ctx, worker, extractedArticles, query); err != nil {
+				fmt.Printf("Error generating resume: %v\n", err)
+			} else {
+				fmt.Println("Resume generated: summaries/resume_....docx")
+			}
+		}
+	}
+
+	return nil
+}
+
+func generateResume(ctx context.Context, w *extract.Worker, articles []extract.Article, query string) error {
+	if err := os.MkdirAll("summaries", 0755); err != nil {
+		return fmt.Errorf("creating summaries dir: %w", err)
+	}
+
+	// Aggregate texts
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("User Query: %s\n\n", query))
+	sb.WriteString("Source Articles:\n")
+	for _, art := range articles {
+		sb.WriteString(fmt.Sprintf("Title: %s\nSource: %s\nText:\n%s\n\n", art.Title, art.Site, art.Text))
+	}
+
+	fullText := sb.String()
+
+	// Call summarizer
+	summary, err := w.Summarize(ctx, fullText)
+	if err != nil {
+		return err
+	}
+
+	// Save to DOCX
+	f := docx.NewFile()
+
+	// Header
+	p := f.AddParagraph()
+	run := p.AddText("Global Intelligence Resume")
+	run.Size(20)
+	// run.Bold()
+
+	p = f.AddParagraph()
+	p.AddText(fmt.Sprintf("Query: %s", query))
+
+	f.AddParagraph() // Spacer
+
+	// Summary Content
+	p = f.AddParagraph()
+	p.AddText(summary)
+
+	f.AddParagraph() // Spacer
+	f.AddParagraph().AddText("--------------------------------------------------")
+	f.AddParagraph() // Spacer
+
+	p = f.AddParagraph()
+	p.AddText("Based on sources:")
+	for _, art := range articles {
+		f.AddParagraph().AddText(fmt.Sprintf("- %s (%s)", art.Title, art.Site))
+	}
+
+	timestamp := time.Now().Format("2006-01-02_15-04")
+	filename := fmt.Sprintf("summaries/resume_%s.docx", timestamp)
+	if err := f.Save(filename); err != nil {
+		return err
 	}
 
 	return nil
