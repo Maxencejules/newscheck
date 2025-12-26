@@ -13,6 +13,7 @@ from urllib.parse import urlparse, urljoin, unquote, parse_qs
 import requests
 from bs4 import BeautifulSoup
 import trafilatura
+from deep_translator import GoogleTranslator
 
 try:
     from playwright.sync_api import sync_playwright
@@ -384,6 +385,7 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=20)
     ap.add_argument("--max-bytes", type=int, default=3_000_000)
     ap.add_argument("--debug", action="store_true", help="Print debug info to stderr")
+    ap.add_argument("--target-lang", help="Target language code to translate to (e.g. 'en', 'fr')")
     args = ap.parse_args()
 
     started = time.time()
@@ -457,6 +459,36 @@ def main() -> int:
 
         lang = clean_lang(detect_lang(soup) or pick_meta(soup, "og:locale"))
         text = extract_main_text(soup, html_text)
+
+        # Translation logic
+        if args.target_lang and args.target_lang != lang:
+            if args.debug:
+                print(f"[DEBUG] Translating content to {args.target_lang}...", file=sys.stderr, flush=True)
+
+            translator = GoogleTranslator(source='auto', target=args.target_lang)
+
+            # Translate Title
+            if title:
+                try:
+                    title = translator.translate(title)
+                except Exception as e:
+                    if args.debug:
+                        print(f"[DEBUG] Title translation failed: {e}", file=sys.stderr, flush=True)
+
+            # Translate Text (chunked to avoid limits)
+            if text:
+                try:
+                    # Split into chunks ~4500 chars (safe limit)
+                    chunks = [text[i:i+4500] for i in range(0, len(text), 4500)]
+                    translated_chunks = []
+                    for chunk in chunks:
+                        translated_chunks.append(translator.translate(chunk))
+                    text = " ".join(translated_chunks)
+                except Exception as e:
+                    if args.debug:
+                        print(f"[DEBUG] Text translation failed: {e}", file=sys.stderr, flush=True)
+
+            # NOTE: We specifically DO NOT translate 'site' or 'author' as requested.
 
         out = Extracted(
             url=original_url,

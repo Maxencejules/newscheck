@@ -41,15 +41,26 @@ func NewWorker() *Worker {
 	}
 }
 
-func (w *Worker) Extract(ctx context.Context, url string) (Article, error) {
+func (w *Worker) Extract(ctx context.Context, url string, targetLang string) (Article, error) {
 	if w.PythonExe == "" || w.Script == "" {
 		return Article{}, errors.New("worker not configured")
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	// Increase timeout for translation
+	timeout := 25 * time.Second
+	if targetLang != "" {
+		timeout = 45 * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, w.PythonExe, w.Script, "--url", url)
+	args := []string{w.Script, "--url", url}
+	if targetLang != "" {
+		args = append(args, "--target-lang", targetLang)
+	}
+
+	cmd := exec.CommandContext(ctx, w.PythonExe, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
