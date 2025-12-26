@@ -12,6 +12,7 @@ from urllib.parse import urlparse, urljoin, unquote, parse_qs
 
 import requests
 from bs4 import BeautifulSoup
+import trafilatura
 
 try:
     from playwright.sync_api import sync_playwright
@@ -64,7 +65,16 @@ def detect_lang(soup: BeautifulSoup) -> Optional[str]:
     return lang.split("-")[0].lower().strip() or None
 
 
-def extract_main_text(soup: BeautifulSoup) -> str:
+def extract_main_text(soup: BeautifulSoup, html_text: str) -> str:
+    # Try trafilatura first as it's specialized for article extraction
+    try:
+        text = trafilatura.extract(html_text, include_comments=False, include_tables=False)
+        if text:
+            return normalize_space(text)
+    except Exception:
+        pass
+
+    # Fallback to BeautifulSoup logic
     for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
         tag.decompose()
 
@@ -446,7 +456,7 @@ def main() -> int:
         published = pick_meta(soup, "article:published_time", "og:updated_time", "date", "pubdate")
 
         lang = clean_lang(detect_lang(soup) or pick_meta(soup, "og:locale"))
-        text = extract_main_text(soup)
+        text = extract_main_text(soup, html_text)
 
         out = Extracted(
             url=original_url,

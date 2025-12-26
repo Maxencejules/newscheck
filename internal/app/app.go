@@ -220,11 +220,20 @@ func Run() error {
 	// Relevance filtering
 	candidates = filterCandidates(candidates, query, intent, resolved)
 
+	// Cross-source consensus scoring
+	consensusScores := calculateConsensus(candidates)
+
 	fmt.Printf("\nDiscovered %d candidate articles (after filtering)\n", len(candidates))
 	for i := 0; i < mini(20, len(candidates)); i++ {
 		c := candidates[i]
-		fmt.Printf("%2d) %s\n    %s\n    %s\n    %s\n",
-			i+1, c.Title, c.URL, c.PublishedAt.Format(time.RFC3339), c.Source)
+		score := consensusScores[c.URL]
+		consensusLabel := ""
+		if score > 1 {
+			consensusLabel = fmt.Sprintf(" [Consensus: %d]", score)
+		}
+
+		fmt.Printf("%2d) %s%s\n    %s\n    %s\n    %s\n",
+			i+1, c.Title, consensusLabel, c.URL, c.PublishedAt.Format(time.RFC3339), c.Source)
 	}
 
 	// 8) Step 7: Fetch + Extract (Python worker) for top N
@@ -560,6 +569,53 @@ func buildScopes(intent Intent) []string {
 		scopes = []string{"global"}
 	}
 	return uniqueSorted(scopes)
+}
+
+func calculateConsensus(candidates []discovery.Candidate) map[string]int {
+	scores := make(map[string]int)
+	if len(candidates) < 2 {
+		return scores
+	}
+
+	// Pre-process titles into sets of tokens
+	type doc struct {
+		url    string
+		tokens map[string]struct{}
+	}
+
+	docs := make([]doc, len(candidates))
+	for i, c := range candidates {
+		// Use extractKeywords to get significant tokens
+		tokens := extractKeywords(strings.ToLower(c.Title))
+		set := make(map[string]struct{})
+		for _, t := range tokens {
+			set[t] = struct{}{}
+		}
+		docs[i] = doc{c.URL, set}
+	}
+
+	// Compare every pair
+	for i := 0; i < len(docs); i++ {
+		for j := 0; j < len(docs); j++ {
+			if i == j {
+				continue
+			}
+
+			// Calculate overlap (Jaccard-ish)
+			common := 0
+			for t := range docs[i].tokens {
+				if _, ok := docs[j].tokens[t]; ok {
+					common++
+				}
+			}
+
+			// Threshold: if they share significant keywords, assume they cover the same topic
+			if common >= 2 {
+				scores[docs[i].url]++
+			}
+		}
+	}
+	return scores
 }
 
 func filterCandidates(candidates []discovery.Candidate, query string, intent Intent, countries []geo.CountryInfo) []discovery.Candidate {
