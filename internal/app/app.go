@@ -315,7 +315,11 @@ func generateReports(articles []extract.Article, candidates []discovery.Candidat
 
 			// Metadata
 			p = f.AddParagraph()
-			run = p.AddText(fmt.Sprintf("Source: %s | Date: %s", art.Site, art.PublishedAt))
+			pub := ""
+			if art.PublishedAt != nil {
+				pub = *art.PublishedAt
+			}
+			run = p.AddText(fmt.Sprintf("Source: %s | Date: %s", art.Site, pub))
 			run.Size(10)
 			run.Color("808080")
 
