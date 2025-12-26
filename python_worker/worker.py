@@ -13,6 +13,11 @@ from urllib.parse import urlparse, urljoin, unquote, parse_qs
 import requests
 from bs4 import BeautifulSoup
 
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    sync_playwright = None
+
 
 @dataclass
 class Extracted:
@@ -202,6 +207,75 @@ def unwrap_google_redirect(href: str) -> str:
         return href
 
 
+def decode_google_news_url(source_url: str) -> str:
+    """
+    Decodes Google News URLs using a headless browser (Playwright).
+    The URL structure is complex and often requires executing JS to get the final redirect.
+    """
+    try:
+        url = urlparse(source_url)
+        # Check if it looks like a Google News wrapper
+        if not (url.hostname in ("news.google.com", "www.google.com", "google.com") and
+                ("/articles/" in url.path or "/rss/articles/" in url.path)):
+            return source_url
+
+        if sync_playwright:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                page = context.new_page()
+
+                # Navigate to the URL
+                try:
+                    # We expect a redirect. Wait for navigation to a non-google URL or timeout.
+                    # However, sometimes it redirects to another google URL.
+                    # Let's just navigate and wait for the final URL.
+                    response = page.goto(source_url, timeout=30000, wait_until="domcontentloaded")
+
+                    # Wait a bit for JS redirects if any
+                    page.wait_for_timeout(2000)
+
+                    final_url = page.url
+                    final_host = urlparse(final_url).netloc.lower()
+
+                    if "google" not in final_host:
+                        return final_url
+
+                    # If still on google, maybe we need to click something?
+                    # Usually the JS redirect happens automatically.
+                    # Let's try to find the link in the DOM if we are still on google
+
+                    # Try to find link in canonical
+                    canon = page.locator("link[rel='canonical']").get_attribute("href")
+                    if canon and "google" not in urlparse(canon).netloc:
+                        return canon
+
+                    # Try to find "Read full article" link
+                    # Note: The text might vary by locale
+                    links = page.locator("a")
+                    count = links.count()
+                    for i in range(count):
+                        href = links.nth(i).get_attribute("href")
+                        if href:
+                            href = unwrap_google_redirect(href)
+                            if href.startswith("http") and "google" not in urlparse(href).netloc:
+                                return href
+
+                except Exception:
+                    pass
+                finally:
+                    browser.close()
+        else:
+            # Fallback or error if playwright not available
+            print("[WARN] Playwright not installed, skipping advanced decoding", file=sys.stderr)
+
+        return source_url
+    except Exception:
+        return source_url
+
+
 def extract_publisher_url_from_google_news(html_text: str, base_url: str) -> Optional[str]:
     """Extract the real article URL from Google News wrapper page"""
     soup = BeautifulSoup(html_text, "html.parser")
@@ -310,20 +384,31 @@ def main() -> int:
         if args.debug:
             print(f"[DEBUG] Fetching: {original_url}", file=sys.stderr, flush=True)
 
-        # Special handling for Google News - try redirect first
+        # Special handling for Google News - try decode first
         if is_google_news_wrapper(original_url):
             if args.debug:
-                print(f"[DEBUG] Detected Google News wrapper, trying redirect...", file=sys.stderr, flush=True)
+                print(f"[DEBUG] Detected Google News wrapper, trying decode...", file=sys.stderr, flush=True)
 
-            redirected = try_google_news_redirect(original_url, args.timeout)
-            if redirected:
+            decoded = decode_google_news_url(original_url)
+            if decoded != original_url:
                 if args.debug:
-                    print(f"[DEBUG] Redirect successful: {redirected}", file=sys.stderr, flush=True)
-                original_url = redirected
-                resolved_url = redirected
+                    print(f"[DEBUG] Decode successful: {decoded}", file=sys.stderr, flush=True)
+                original_url = decoded
+                resolved_url = decoded
             else:
+                # Fallback to redirect logic if decode fails or returns same URL
                 if args.debug:
-                    print(f"[DEBUG] Redirect failed, will try HTML parsing", file=sys.stderr, flush=True)
+                    print(f"[DEBUG] Decode failed/same, trying redirect...", file=sys.stderr, flush=True)
+
+                redirected = try_google_news_redirect(original_url, args.timeout)
+                if redirected:
+                    if args.debug:
+                        print(f"[DEBUG] Redirect successful: {redirected}", file=sys.stderr, flush=True)
+                    original_url = redirected
+                    resolved_url = redirected
+                else:
+                    if args.debug:
+                        print(f"[DEBUG] Redirect failed, will try HTML parsing", file=sys.stderr, flush=True)
 
         html_text, final_url, _ctype = fetch_html(original_url, args.timeout, args.max_bytes)
         resolved_url = final_url
