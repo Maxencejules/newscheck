@@ -14,6 +14,19 @@ import requests
 from bs4 import BeautifulSoup
 import trafilatura
 from deep_translator import GoogleTranslator
+import nltk
+from sumy.parsers.plaintext import PlaintextParser
+from sumy.nlp.tokenizers import Tokenizer
+from sumy.summarizers.lsa import LsaSummarizer as Summarizer
+from sumy.nlp.stemmers import Stemmer
+from sumy.utils import get_stop_words
+import google.generativeai as genai
+import os
+
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt', quiet=True)
 
 try:
     from playwright.sync_api import sync_playwright
@@ -356,6 +369,48 @@ def clean_lang(lang: Optional[str]) -> Optional[str]:
     return lang or None
 
 
+def summarize_with_gemini(text: str, api_key: str) -> Optional[str]:
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(
+            f"Please provide a coherent summary of the following text:\n\n{text}",
+            generation_config=genai.types.GenerationConfig(
+                candidate_count=1,
+                max_output_tokens=1000,
+                temperature=0.7,
+            ),
+        )
+        if response.text:
+            return response.text
+        return None
+    except Exception as e:
+        print(f"[WARN] Gemini summarization failed: {e}", file=sys.stderr)
+        return None
+
+
+def generate_summary(text: str, count: int = 5, lang: str = "english") -> str:
+    if not text or len(text) < 50:
+        return ""
+
+    try:
+        # Map common lang codes to sumy supported languages if needed
+        # For now defaulting to english for stemming if unknown
+        if lang not in ["english", "french", "german", "spanish", "portuguese"]:
+            lang = "english"
+
+        parser = PlaintextParser.from_string(text, Tokenizer(lang))
+        stemmer = Stemmer(lang)
+        summarizer = Summarizer(stemmer)
+        summarizer.stop_words = get_stop_words(lang)
+
+        sentences = summarizer(parser.document, count)
+        return " ".join([str(s) for s in sentences])
+    except Exception:
+        # Fallback if summarization fails
+        return text[:500] + "..." if len(text) > 500 else text
+
+
 def safe_json_output(payload: dict) -> None:
     """Safely output JSON even with encoding issues"""
     try:
@@ -381,7 +436,8 @@ def main() -> int:
         pass
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--url", required=True)
+    ap.add_argument("--mode", default="extract", choices=["extract", "summarize"])
+    ap.add_argument("--url", help="URL to extract (required for extract mode)")
     ap.add_argument("--timeout", type=int, default=20)
     ap.add_argument("--max-bytes", type=int, default=3_000_000)
     ap.add_argument("--debug", action="store_true", help="Print debug info to stderr")
@@ -389,6 +445,39 @@ def main() -> int:
     args = ap.parse_args()
 
     started = time.time()
+
+    # Summarize Mode
+    if args.mode == "summarize":
+        try:
+            # Read text from stdin
+            input_text = sys.stdin.read()
+
+            summary = ""
+            gemini_key = os.environ.get("GEMINI_API_KEY")
+
+            if gemini_key:
+                summary = summarize_with_gemini(input_text, gemini_key)
+
+            # Fallback to sumy if Gemini failed or no key provided
+            if not summary:
+                if gemini_key:
+                    print("[INFO] Fallback to local summarization", file=sys.stderr)
+                summary = generate_summary(input_text, count=10) # 10 sentences for global resume
+
+            elapsed = int((time.time() - started) * 1000)
+            payload = {"ok": True, "elapsed_ms": elapsed, "summary": summary}
+            safe_json_output(payload)
+            return 0
+        except Exception as e:
+            elapsed = int((time.time() - started) * 1000)
+            payload = {"ok": False, "elapsed_ms": elapsed, "error": str(e)}
+            safe_json_output(payload)
+            return 1
+
+    if not args.url:
+        print('{"ok": false, "error": "Missing --url argument"}')
+        return 1
+
     original_url = args.url.strip()
     resolved_url = original_url
 
