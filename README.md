@@ -1,6 +1,6 @@
 # NewsCheck
 
-NewsCheck is a command-line tool for discovering, extracting, and analyzing news articles from around the world. It allows targeted searches by country, region, or topic, and provides relevance scoring and cross-source consensus verification.
+NewsCheck is a powerful command-line intelligence tool for discovering, extracting, summarizing, and analyzing news articles from around the world. It allows targeted searches by country, region, or topic, provides relevance scoring, verifies cross-source consensus, and generates coherent AI-powered summaries.
 
 ## Features
 
@@ -15,20 +15,16 @@ NewsCheck is a command-line tool for discovering, extracting, and analyzing news
 -   **Relevance & Consensus Scoring:**
     -   **Relevance Score:** Scores articles based on keyword matches in titles and country context.
     -   **Consensus Score:** Identifies how many distinct sources are covering the same story to verify its significance.
--   **Content Extraction:**
+-   **Content Extraction & Translation:**
     -   Extracts clean article text (removing navigation, ads, headers) using `trafilatura` and `BeautifulSoup`.
-    -   Generates comprehensive reports in DOCX format.
--   **Reports:**
-    -   `articles.docx`: Full text of extracted articles.
-    -   `scores.docx`: Relevance and consensus scores for all discovered candidates.
-
-## Architecture
-
-The project follows a hybrid architecture:
--   **Go (`cmd/newscheck`, `internal/`):** Handles CLI interaction, search planning, RSS discovery, scoring, and report generation.
--   **Python (`python_worker/worker.py`):** A dedicated worker for content extraction. It uses:
-    -   `playwright`: To resolve complex JavaScript redirects (Google News wrappers).
-    -   `trafilatura` & `beautifulsoup4`: For high-quality text extraction.
+    -   Optionally translates content to a pivot language (English/French) while preserving metadata.
+-   **AI Summarization (Global Resume):**
+    -   **Gemini AI:** Uses Google's Gemini API (if configured) to generate a coherent "Global Intelligence Resume" synthesizing all extracted articles.
+    -   **Local Fallback:** Falls back to local LSA summarization (`sumy`) if no API key is provided.
+-   **Comprehensive Reports (DOCX):**
+    -   `reports/articles_....docx`: Full text of extracted articles.
+    -   `scores/scores_....docx`: Relevance and consensus scores for all candidates.
+    -   `summaries/resume_....docx`: A synthesized executive summary of the topic.
 
 ## Prerequisites
 
@@ -61,6 +57,24 @@ playwright install chromium
 playwright install-deps
 ```
 
+## Configuration
+
+### API Keys (Optional)
+
+To enable high-quality AI summarization, set the `GEMINI_API_KEY` environment variable.
+
+**Linux/macOS:**
+```bash
+export GEMINI_API_KEY="your_api_key_here"
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:GEMINI_API_KEY="your_api_key_here"
+```
+
+If the key is not set, NewsCheck will automatically use a local summarization algorithm (Sumy/LSA).
+
 ## Usage
 
 Run the application:
@@ -79,20 +93,25 @@ go run cmd/newscheck/main.go
     -   `Global`: Searches worldwide.
 4.  **Select Pivot Language:** Choose a target language for potential translation (English/French).
 5.  **View Results:** The tool displays a list of discovered articles with their **Relevance** and **Consensus** scores.
-6.  **Extract Content:** Choose how many top articles to extract.
-7.  **Get Reports:** The tool generates `articles.docx` and `scores.docx` in the current directory.
+6.  **Extract Content:** Choose how many top articles to extract (default 5).
+7.  **Get Reports:** The tool automatically generates reports in `reports/`, `scores/`, and `summaries/`.
 
-## Configuration
+## Architecture
 
--   `data/country_languages.json`: Database of countries and their languages/ISO codes.
--   `data/country_auto_cache.json`: Cache for automatically resolved country queries.
+The project follows a hybrid architecture:
+-   **Go (`cmd/newscheck`, `internal/`):** Handles CLI interaction, search planning, RSS discovery, scoring, and report generation.
+-   **Python (`python_worker/worker.py`):** A dedicated worker for content extraction and summarization. It uses:
+    -   `playwright`: To resolve complex JavaScript redirects (Google News wrappers).
+    -   `trafilatura` & `beautifulsoup4`: For high-quality text extraction.
+    -   `google-generativeai`: For AI summarization.
+    -   `sumy`: For local fallback summarization.
 
 ## Troubleshooting
 
 -   **"Worker not configured"**: Ensure `python` is in your PATH or update `internal/extract/extract.go` to point to the correct python executable.
 -   **Extraction fails / Google News links not resolving**: Ensure Playwright is installed (`playwright install chromium`). The worker logs `[DEBUG]` info to stderr which can be seen in the console.
--   **Build errors**: Ensure you have run `go mod tidy` and have the `github.com/gingfrederik/docx` dependency.
+-   **Summarization fails**: Check your `GEMINI_API_KEY` if you expect AI summaries. If using local fallback, ensure `nltk` data is downloaded (the tool attempts to download `punkt` automatically).
 
 ## License
 
-[Your License Here]
+MIT License
