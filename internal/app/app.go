@@ -80,11 +80,14 @@ func Run() error {
 		return err
 	}
 
-	// 3) Intent extraction
-	intent := ExtractIntent(query)
+	// 3) Search scope selection
+	scopeMode, chosenCountry, err := selectSearchScope(in)
+	if err != nil {
+		return err
+	}
 
-	// 4) Search plan generation
-	plans := BuildSearchPlans(query, intent)
+	// 4) Intent extraction
+	intent := ExtractIntent(query)
 
 	// 5) Pivot language selection (translation later)
 	pivot, err := selectPivotLanguage(in)
@@ -121,25 +124,45 @@ func Run() error {
 		return err
 	}
 
-	// Find possibly multiple countries from the raw query (manual overrides only)
-	countryNames := matcher.FindCountries(query)
+	var countryNames []string
 
-	// If matcher found none, fall back to rule-based intent country hits (if any)
-	if len(countryNames) == 0 && len(intent.Countries) > 0 {
-		countryNames = append(countryNames, intent.Countries...)
-	}
+	switch scopeMode {
+	case ScopeAuto:
+		// Auto (current behavior)
+		// Find possibly multiple countries from the raw query (manual overrides only)
+		countryNames = matcher.FindCountries(query)
 
-	// If still none: attempt automatic country resolution from query hints
-	// This is what enables "any country -> local languages" without editing JSON.
-	if len(countryNames) == 0 {
-		hints := geo.ExtractCountryHints(query)
-		for _, h := range hints {
-			info, err := resolver.ResolveCountry(ctx, h)
-			if err == nil && info.ISO2 != "" && len(info.Languages) > 0 {
-				countryNames = append(countryNames, info.Name)
-				break
+		// If matcher found none, fall back to rule-based intent country hits (if any)
+		if len(countryNames) == 0 && len(intent.Countries) > 0 {
+			countryNames = append(countryNames, intent.Countries...)
+		}
+
+		// If still none: attempt automatic country resolution from query hints
+		// This is what enables "any country -> local languages" without editing JSON.
+		if len(countryNames) == 0 {
+			hints := geo.ExtractCountryHints(query)
+			for _, h := range hints {
+				info, err := resolver.ResolveCountry(ctx, h)
+				if err == nil && info.ISO2 != "" && len(info.Languages) > 0 {
+					countryNames = append(countryNames, info.Name)
+					break
+				}
 			}
 		}
+
+	case ScopeChosen:
+		// User chose a specific country
+		countryNames = []string{chosenCountry}
+		// Clear intent countries/regions to prevent mixing if user explicitly chose one
+		intent.Countries = nil
+		intent.Regions = nil
+
+	case ScopeGlobal:
+		// Explicit global - force empty country list
+		countryNames = []string{}
+		// Also clear intent locations
+		intent.Countries = nil
+		intent.Regions = nil
 	}
 
 	// Resolve all countries (some may fail; we skip failed ones)
@@ -156,6 +179,9 @@ func Run() error {
 	// - If none: a safe fallback (US/en)
 	targets := buildTargets(resolved)
 	printTargets(countryNames, resolved, targets)
+
+	// Generate search plans AFTER scope/targets are finalized
+	plans := BuildSearchPlans(query, intent, resolved)
 
 	input := Input{
 		Query:       query,
@@ -191,11 +217,23 @@ func Run() error {
 		return err
 	}
 
-	fmt.Printf("\nDiscovered %d candidate articles (deduped)\n", len(candidates))
+	// Relevance filtering
+	candidates = filterCandidates(candidates, query, intent, resolved)
+
+	// Cross-source consensus scoring
+	consensusScores := calculateConsensus(candidates)
+
+	fmt.Printf("\nDiscovered %d candidate articles (after filtering)\n", len(candidates))
 	for i := 0; i < mini(20, len(candidates)); i++ {
 		c := candidates[i]
-		fmt.Printf("%2d) %s\n    %s\n    %s\n    %s\n",
-			i+1, c.Title, c.URL, c.PublishedAt.Format(time.RFC3339), c.Source)
+		score := consensusScores[c.URL]
+		consensusLabel := ""
+		if score > 1 {
+			consensusLabel = fmt.Sprintf(" [Consensus: %d]", score)
+		}
+
+		fmt.Printf("%2d) %s%s\n    %s\n    %s\n    %s\n",
+			i+1, c.Title, consensusLabel, c.URL, c.PublishedAt.Format(time.RFC3339), c.Source)
 	}
 
 	// 8) Step 7: Fetch + Extract (Python worker) for top N
@@ -427,9 +465,18 @@ func printPlans(plans []SearchPlan) {
 
 // ===== Step 5: Search plan generation =====
 
-func BuildSearchPlans(original string, intent Intent) []SearchPlan {
+func BuildSearchPlans(original string, intent Intent, forcedCountries []geo.CountryInfo) []SearchPlan {
 	base := normalizeQuery(original)
-	scopes := buildScopes(intent)
+
+	// If forced countries exist (from Choose Country mode), override intent scopes
+	var scopes []string
+	if len(forcedCountries) > 0 {
+		for _, c := range forcedCountries {
+			scopes = append(scopes, "country:"+c.ISO2)
+		}
+	} else {
+		scopes = buildScopes(intent)
+	}
 
 	plans := []SearchPlan{}
 
@@ -522,6 +569,123 @@ func buildScopes(intent Intent) []string {
 		scopes = []string{"global"}
 	}
 	return uniqueSorted(scopes)
+}
+
+func calculateConsensus(candidates []discovery.Candidate) map[string]int {
+	scores := make(map[string]int)
+	if len(candidates) < 2 {
+		return scores
+	}
+
+	// Pre-process titles into sets of tokens
+	type doc struct {
+		url    string
+		tokens map[string]struct{}
+	}
+
+	docs := make([]doc, len(candidates))
+	for i, c := range candidates {
+		// Use extractKeywords to get significant tokens
+		tokens := extractKeywords(strings.ToLower(c.Title))
+		set := make(map[string]struct{})
+		for _, t := range tokens {
+			set[t] = struct{}{}
+		}
+		docs[i] = doc{c.URL, set}
+	}
+
+	// Compare every pair
+	for i := 0; i < len(docs); i++ {
+		for j := 0; j < len(docs); j++ {
+			if i == j {
+				continue
+			}
+
+			// Calculate overlap (Jaccard-ish)
+			common := 0
+			for t := range docs[i].tokens {
+				if _, ok := docs[j].tokens[t]; ok {
+					common++
+				}
+			}
+
+			// Threshold: if they share significant keywords, assume they cover the same topic
+			if common >= 2 {
+				scores[docs[i].url]++
+			}
+		}
+	}
+	return scores
+}
+
+func filterCandidates(candidates []discovery.Candidate, query string, intent Intent, countries []geo.CountryInfo) []discovery.Candidate {
+	if len(candidates) == 0 {
+		return candidates
+	}
+
+	// Normalize query terms for simple matching
+	qTerms := extractKeywords(strings.ToLower(query))
+
+	// Add intent keywords
+	for _, k := range intent.Keywords {
+		qTerms = append(qTerms, strings.ToLower(k))
+	}
+
+	// If explicit countries, add them to boost match
+	countryTerms := []string{}
+	for _, c := range countries {
+		countryTerms = append(countryTerms, strings.ToLower(c.Name))
+	}
+
+	type scored struct {
+		c     discovery.Candidate
+		score int
+	}
+
+	var scoredCandidates []scored
+
+	for _, c := range candidates {
+		score := 0
+		title := strings.ToLower(c.Title)
+
+		// 1. Title keyword match (high weight)
+		for _, term := range qTerms {
+			if strings.Contains(title, term) {
+				score += 10
+			}
+		}
+
+		// 2. Country match (medium weight)
+		for _, cName := range countryTerms {
+			if strings.Contains(title, cName) {
+				score += 5
+			}
+		}
+
+		// 3. Recency boost (simple)
+		if time.Since(c.PublishedAt) < 24*time.Hour {
+			score += 2
+		}
+
+		// Threshold: at least one keyword match or very strong other signals
+		if score > 0 {
+			scoredCandidates = append(scoredCandidates, scored{c, score})
+		}
+	}
+
+	// Sort by score descending
+	sort.Slice(scoredCandidates, func(i, j int) bool {
+		return scoredCandidates[i].score > scoredCandidates[j].score
+	})
+
+	out := make([]discovery.Candidate, len(scoredCandidates))
+	for i, sc := range scoredCandidates {
+		out[i] = sc.c
+	}
+
+	// If filtering removed everything but we had candidates, return top original ones as fallback?
+	// Or stricter: return empty. Let's return empty to reduce noise as requested.
+	return out
 }
 
 func normalizeQuery(q string) string {
@@ -721,6 +885,52 @@ func uniqueSorted(in []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ===== Search Scope selection =====
+
+type SearchScope int
+
+const (
+	ScopeAuto SearchScope = iota
+	ScopeChosen
+	ScopeGlobal
+)
+
+func selectSearchScope(r *bufio.Reader) (SearchScope, string, error) {
+	for {
+		fmt.Println("\nSearch scope:")
+		fmt.Println("1) Auto-detect from text (default)")
+		fmt.Println("2) Choose country")
+		fmt.Println("3) Global (worldwide)")
+		fmt.Print("> ")
+
+		choice, _ := r.ReadString('\n')
+		choice = strings.TrimSpace(choice)
+
+		if choice == "" {
+			return ScopeAuto, "", nil
+		}
+
+		switch choice {
+		case "1":
+			return ScopeAuto, "", nil
+		case "2":
+			fmt.Println("Enter country name (e.g. 'Bulgaria'):")
+			fmt.Print("> ")
+			c, _ := r.ReadString('\n')
+			c = strings.TrimSpace(c)
+			if c == "" {
+				fmt.Println("Empty country, falling back to Auto.")
+				return ScopeAuto, "", nil
+			}
+			return ScopeChosen, c, nil
+		case "3":
+			return ScopeGlobal, "", nil
+		default:
+			fmt.Println("Invalid choice. Please select 1-3.")
+		}
+	}
 }
 
 // ===== Time window selection =====
