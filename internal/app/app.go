@@ -328,7 +328,7 @@ func generateResume(ctx context.Context, w *extract.Worker, articles []extract.A
 	fullText := sb.String()
 
 	// Call summarizer
-	summary, err := w.Summarize(ctx, fullText)
+	summary, err := w.Summarize(ctx, fullText, "")
 	if err != nil {
 		return err
 	}
