@@ -1,0 +1,28 @@
+# Wails
+build/bin
+frontend/dist
+frontend/node_modules
+wailsjs/
+
+# Go
+# go.sum # Keep go.sum
+vendor/
+*.exe
+*.dll
+*.so
+*.dylib
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.DS_Store

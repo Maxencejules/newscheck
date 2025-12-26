@@ -12,6 +12,26 @@ from urllib.parse import urlparse, urljoin, unquote, parse_qs
 
 import requests
 from bs4 import BeautifulSoup
+import trafilatura
+from deep_translator import GoogleTranslator
+import nltk
+from sumy.parsers.plaintext import PlaintextParser
+from sumy.nlp.tokenizers import Tokenizer
+from sumy.summarizers.lsa import LsaSummarizer as Summarizer
+from sumy.nlp.stemmers import Stemmer
+from sumy.utils import get_stop_words
+import google.generativeai as genai
+import os
+
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt', quiet=True)
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    sync_playwright = None
 
 
 @dataclass
@@ -59,7 +79,16 @@ def detect_lang(soup: BeautifulSoup) -> Optional[str]:
     return lang.split("-")[0].lower().strip() or None
 
 
-def extract_main_text(soup: BeautifulSoup) -> str:
+def extract_main_text(soup: BeautifulSoup, html_text: str) -> str:
+    # Try trafilatura first as it's specialized for article extraction
+    try:
+        text = trafilatura.extract(html_text, include_comments=False, include_tables=False)
+        if text:
+            return normalize_space(text)
+    except Exception:
+        pass
+
+    # Fallback to BeautifulSoup logic
     for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
         tag.decompose()
 
@@ -202,6 +231,75 @@ def unwrap_google_redirect(href: str) -> str:
         return href
 
 
+def decode_google_news_url(source_url: str) -> str:
+    """
+    Decodes Google News URLs using a headless browser (Playwright).
+    The URL structure is complex and often requires executing JS to get the final redirect.
+    """
+    try:
+        url = urlparse(source_url)
+        # Check if it looks like a Google News wrapper
+        if not (url.hostname in ("news.google.com", "www.google.com", "google.com") and
+                ("/articles/" in url.path or "/rss/articles/" in url.path)):
+            return source_url
+
+        if sync_playwright:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                page = context.new_page()
+
+                # Navigate to the URL
+                try:
+                    # We expect a redirect. Wait for navigation to a non-google URL or timeout.
+                    # However, sometimes it redirects to another google URL.
+                    # Let's just navigate and wait for the final URL.
+                    response = page.goto(source_url, timeout=30000, wait_until="domcontentloaded")
+
+                    # Wait a bit for JS redirects if any
+                    page.wait_for_timeout(2000)
+
+                    final_url = page.url
+                    final_host = urlparse(final_url).netloc.lower()
+
+                    if "google" not in final_host:
+                        return final_url
+
+                    # If still on google, maybe we need to click something?
+                    # Usually the JS redirect happens automatically.
+                    # Let's try to find the link in the DOM if we are still on google
+
+                    # Try to find link in canonical
+                    canon = page.locator("link[rel='canonical']").get_attribute("href")
+                    if canon and "google" not in urlparse(canon).netloc:
+                        return canon
+
+                    # Try to find "Read full article" link
+                    # Note: The text might vary by locale
+                    links = page.locator("a")
+                    count = links.count()
+                    for i in range(count):
+                        href = links.nth(i).get_attribute("href")
+                        if href:
+                            href = unwrap_google_redirect(href)
+                            if href.startswith("http") and "google" not in urlparse(href).netloc:
+                                return href
+
+                except Exception:
+                    pass
+                finally:
+                    browser.close()
+        else:
+            # Fallback or error if playwright not available
+            print("[WARN] Playwright not installed, skipping advanced decoding", file=sys.stderr)
+
+        return source_url
+    except Exception:
+        return source_url
+
+
 def extract_publisher_url_from_google_news(html_text: str, base_url: str) -> Optional[str]:
     """Extract the real article URL from Google News wrapper page"""
     soup = BeautifulSoup(html_text, "html.parser")
@@ -271,6 +369,48 @@ def clean_lang(lang: Optional[str]) -> Optional[str]:
     return lang or None
 
 
+def summarize_with_gemini(text: str, api_key: str) -> Optional[str]:
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(
+            f"Please provide a coherent summary of the following text:\n\n{text}",
+            generation_config=genai.types.GenerationConfig(
+                candidate_count=1,
+                max_output_tokens=1000,
+                temperature=0.7,
+            ),
+        )
+        if response.text:
+            return response.text
+        return None
+    except Exception as e:
+        print(f"[WARN] Gemini summarization failed: {e}", file=sys.stderr)
+        return None
+
+
+def generate_summary(text: str, count: int = 5, lang: str = "english") -> str:
+    if not text or len(text) < 50:
+        return ""
+
+    try:
+        # Map common lang codes to sumy supported languages if needed
+        # For now defaulting to english for stemming if unknown
+        if lang not in ["english", "french", "german", "spanish", "portuguese"]:
+            lang = "english"
+
+        parser = PlaintextParser.from_string(text, Tokenizer(lang))
+        stemmer = Stemmer(lang)
+        summarizer = Summarizer(stemmer)
+        summarizer.stop_words = get_stop_words(lang)
+
+        sentences = summarizer(parser.document, count)
+        return " ".join([str(s) for s in sentences])
+    except Exception:
+        # Fallback if summarization fails
+        return text[:500] + "..." if len(text) > 500 else text
+
+
 def safe_json_output(payload: dict) -> None:
     """Safely output JSON even with encoding issues"""
     try:
@@ -296,13 +436,48 @@ def main() -> int:
         pass
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--url", required=True)
+    ap.add_argument("--mode", default="extract", choices=["extract", "summarize"])
+    ap.add_argument("--url", help="URL to extract (required for extract mode)")
     ap.add_argument("--timeout", type=int, default=20)
     ap.add_argument("--max-bytes", type=int, default=3_000_000)
     ap.add_argument("--debug", action="store_true", help="Print debug info to stderr")
+    ap.add_argument("--target-lang", help="Target language code to translate to (e.g. 'en', 'fr')")
     args = ap.parse_args()
 
     started = time.time()
+
+    # Summarize Mode
+    if args.mode == "summarize":
+        try:
+            # Read text from stdin
+            input_text = sys.stdin.read()
+
+            summary = ""
+            gemini_key = os.environ.get("GEMINI_API_KEY")
+
+            if gemini_key:
+                summary = summarize_with_gemini(input_text, gemini_key)
+
+            # Fallback to sumy if Gemini failed or no key provided
+            if not summary:
+                if gemini_key:
+                    print("[INFO] Fallback to local summarization", file=sys.stderr)
+                summary = generate_summary(input_text, count=10) # 10 sentences for global resume
+
+            elapsed = int((time.time() - started) * 1000)
+            payload = {"ok": True, "elapsed_ms": elapsed, "summary": summary}
+            safe_json_output(payload)
+            return 0
+        except Exception as e:
+            elapsed = int((time.time() - started) * 1000)
+            payload = {"ok": False, "elapsed_ms": elapsed, "error": str(e)}
+            safe_json_output(payload)
+            return 1
+
+    if not args.url:
+        print('{"ok": false, "error": "Missing --url argument"}')
+        return 1
+
     original_url = args.url.strip()
     resolved_url = original_url
 
@@ -310,20 +485,31 @@ def main() -> int:
         if args.debug:
             print(f"[DEBUG] Fetching: {original_url}", file=sys.stderr, flush=True)
 
-        # Special handling for Google News - try redirect first
+        # Special handling for Google News - try decode first
         if is_google_news_wrapper(original_url):
             if args.debug:
-                print(f"[DEBUG] Detected Google News wrapper, trying redirect...", file=sys.stderr, flush=True)
+                print(f"[DEBUG] Detected Google News wrapper, trying decode...", file=sys.stderr, flush=True)
 
-            redirected = try_google_news_redirect(original_url, args.timeout)
-            if redirected:
+            decoded = decode_google_news_url(original_url)
+            if decoded != original_url:
                 if args.debug:
-                    print(f"[DEBUG] Redirect successful: {redirected}", file=sys.stderr, flush=True)
-                original_url = redirected
-                resolved_url = redirected
+                    print(f"[DEBUG] Decode successful: {decoded}", file=sys.stderr, flush=True)
+                original_url = decoded
+                resolved_url = decoded
             else:
+                # Fallback to redirect logic if decode fails or returns same URL
                 if args.debug:
-                    print(f"[DEBUG] Redirect failed, will try HTML parsing", file=sys.stderr, flush=True)
+                    print(f"[DEBUG] Decode failed/same, trying redirect...", file=sys.stderr, flush=True)
+
+                redirected = try_google_news_redirect(original_url, args.timeout)
+                if redirected:
+                    if args.debug:
+                        print(f"[DEBUG] Redirect successful: {redirected}", file=sys.stderr, flush=True)
+                    original_url = redirected
+                    resolved_url = redirected
+                else:
+                    if args.debug:
+                        print(f"[DEBUG] Redirect failed, will try HTML parsing", file=sys.stderr, flush=True)
 
         html_text, final_url, _ctype = fetch_html(original_url, args.timeout, args.max_bytes)
         resolved_url = final_url
@@ -361,7 +547,37 @@ def main() -> int:
         published = pick_meta(soup, "article:published_time", "og:updated_time", "date", "pubdate")
 
         lang = clean_lang(detect_lang(soup) or pick_meta(soup, "og:locale"))
-        text = extract_main_text(soup)
+        text = extract_main_text(soup, html_text)
+
+        # Translation logic
+        if args.target_lang and args.target_lang != lang:
+            if args.debug:
+                print(f"[DEBUG] Translating content to {args.target_lang}...", file=sys.stderr, flush=True)
+
+            translator = GoogleTranslator(source='auto', target=args.target_lang)
+
+            # Translate Title
+            if title:
+                try:
+                    title = translator.translate(title)
+                except Exception as e:
+                    if args.debug:
+                        print(f"[DEBUG] Title translation failed: {e}", file=sys.stderr, flush=True)
+
+            # Translate Text (chunked to avoid limits)
+            if text:
+                try:
+                    # Split into chunks ~4500 chars (safe limit)
+                    chunks = [text[i:i+4500] for i in range(0, len(text), 4500)]
+                    translated_chunks = []
+                    for chunk in chunks:
+                        translated_chunks.append(translator.translate(chunk))
+                    text = " ".join(translated_chunks)
+                except Exception as e:
+                    if args.debug:
+                        print(f"[DEBUG] Text translation failed: {e}", file=sys.stderr, flush=True)
+
+            # NOTE: We specifically DO NOT translate 'site' or 'author' as requested.
 
         out = Extracted(
             url=original_url,

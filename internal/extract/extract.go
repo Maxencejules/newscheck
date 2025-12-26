@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -41,15 +42,78 @@ func NewWorker() *Worker {
 	}
 }
 
-func (w *Worker) Extract(ctx context.Context, url string) (Article, error) {
+func (w *Worker) Summarize(ctx context.Context, text string, apiKey string) (string, error) {
+	if w.PythonExe == "" || w.Script == "" {
+		return "", errors.New("worker not configured")
+	}
+	if text == "" {
+		return "", nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	args := []string{w.Script, "--mode", "summarize"}
+	cmd := exec.CommandContext(ctx, w.PythonExe, args...)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Stdin = bytes.NewBufferString(text)
+
+	// Use provided key or fallback to env
+	keyToUse := apiKey
+	if keyToUse == "" {
+		keyToUse = os.Getenv("GEMINI_API_KEY")
+	}
+
+	cmd.Env = append(os.Environ(), "GEMINI_API_KEY="+keyToUse)
+
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("summarize timeout: %w", ctx.Err())
+	}
+	if err != nil {
+		return "", fmt.Errorf("summarize failed: %v (stderr=%s)", err, stderr.String())
+	}
+
+	type summaryResp struct {
+		OK        bool   `json:"ok"`
+		Summary   string `json:"summary"`
+		Error     string `json:"error"`
+	}
+
+	var resp summaryResp
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		return "", fmt.Errorf("bad summary json: %v (out=%s)", err, stdout.String())
+	}
+	if !resp.OK {
+		return "", fmt.Errorf("summary worker error: %s", resp.Error)
+	}
+
+	return resp.Summary, nil
+}
+
+func (w *Worker) Extract(ctx context.Context, url string, targetLang string) (Article, error) {
 	if w.PythonExe == "" || w.Script == "" {
 		return Article{}, errors.New("worker not configured")
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	// Increase timeout for translation
+	timeout := 25 * time.Second
+	if targetLang != "" {
+		timeout = 45 * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, w.PythonExe, w.Script, "--url", url)
+	args := []string{w.Script, "--url", url}
+	if targetLang != "" {
+		args = append(args, "--target-lang", targetLang)
+	}
+
+	cmd := exec.CommandContext(ctx, w.PythonExe, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
