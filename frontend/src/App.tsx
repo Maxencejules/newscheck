@@ -6,6 +6,8 @@ import './App.css';
 interface SearchParams {
     query: string;
     days: number;
+    customFrom?: string;
+    customTo?: string;
     scope: number;
     chosenCountry: string;
     pivotLang: string;
@@ -55,6 +57,8 @@ function App() {
     // Search State
     const [query, setQuery] = useState("");
     const [days, setDays] = useState(7);
+    const [customFrom, setCustomFrom] = useState("");
+    const [customTo, setCustomTo] = useState("");
     const [scope, setScope] = useState(0);
     const [chosenCountry, setChosenCountry] = useState("");
     const [pivotLang, setPivotLang] = useState("en");
@@ -78,6 +82,8 @@ function App() {
             const params: SearchParams = {
                 query,
                 days: Number(days),
+                customFrom,
+                customTo,
                 scope: Number(scope),
                 chosenCountry,
                 pivotLang
@@ -193,7 +199,14 @@ function App() {
                                 <option value={1}>Last 24 Hours</option>
                                 <option value={7}>Last 7 Days</option>
                                 <option value={30}>Last 30 Days</option>
+                                <option value={-1}>Custom Range</option>
                             </select>
+                            {days === -1 && (
+                                <div style={{display:'flex', gap:'10px', marginTop:'10px'}}>
+                                    <input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)} placeholder="From" />
+                                    <input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)} placeholder="To" />
+                                </div>
+                            )}
                         </div>
                         <div className="form-group">
                             <label>Pivot Language</label>
