@@ -42,7 +42,7 @@ func NewWorker() *Worker {
 	}
 }
 
-func (w *Worker) Summarize(ctx context.Context, text string) (string, error) {
+func (w *Worker) Summarize(ctx context.Context, text string, apiKey string) (string, error) {
 	if w.PythonExe == "" || w.Script == "" {
 		return "", errors.New("worker not configured")
 	}
@@ -61,8 +61,13 @@ func (w *Worker) Summarize(ctx context.Context, text string) (string, error) {
 	cmd.Stderr = &stderr
 	cmd.Stdin = bytes.NewBufferString(text)
 
-	// Pass Gemini Key explicitly if needed, though os.Environ() covers it if set in current process
-	cmd.Env = append(os.Environ(), "GEMINI_API_KEY="+os.Getenv("GEMINI_API_KEY"))
+	// Use provided key or fallback to env
+	keyToUse := apiKey
+	if keyToUse == "" {
+		keyToUse = os.Getenv("GEMINI_API_KEY")
+	}
+
+	cmd.Env = append(os.Environ(), "GEMINI_API_KEY="+keyToUse)
 
 	err := cmd.Run()
 	if ctx.Err() != nil {
