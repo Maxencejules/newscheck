@@ -354,8 +354,8 @@ func generateReports(articles []extract.Article, candidates []discovery.Candidat
 			f.AddParagraph().AddText("--------------------------------------------------")
 		}
 
-		timestamp := time.Now().Format("20060102-150405")
-		filename := fmt.Sprintf("reports/articles-%s.docx", timestamp)
+		timestamp := time.Now().Format("2006-01-02_15-04")
+		filename := fmt.Sprintf("reports/articles_%s.docx", timestamp)
 		if err := f.Save(filename); err != nil {
 			return err
 		}
@@ -413,8 +413,8 @@ func generateReports(articles []extract.Article, candidates []discovery.Candidat
 			f.AddParagraph() // Spacer
 		}
 
-		timestamp := time.Now().Format("20060102-150405")
-		filename := fmt.Sprintf("scores/scores-%s.docx", timestamp)
+		timestamp := time.Now().Format("2006-01-02_15-04")
+		filename := fmt.Sprintf("scores/scores_%s.docx", timestamp)
 		if err := f.Save(filename); err != nil {
 			return err
 		}
