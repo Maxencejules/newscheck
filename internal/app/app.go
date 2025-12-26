@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/gingfrederik/docx"
 	"newscheck/internal/discovery"
 	"newscheck/internal/extract"
 	"newscheck/internal/geo"
@@ -222,18 +223,20 @@ func Run() error {
 
 	// Cross-source consensus scoring
 	consensusScores := calculateConsensus(candidates)
+	for i := range candidates {
+		candidates[i].ConsensusScore = consensusScores[candidates[i].URL]
+	}
 
 	fmt.Printf("\nDiscovered %d candidate articles (after filtering)\n", len(candidates))
 	for i := 0; i < mini(20, len(candidates)); i++ {
 		c := candidates[i]
-		score := consensusScores[c.URL]
 		consensusLabel := ""
-		if score > 1 {
-			consensusLabel = fmt.Sprintf(" [Consensus: %d]", score)
+		if c.ConsensusScore > 1 {
+			consensusLabel = fmt.Sprintf(" [Consensus: %d]", c.ConsensusScore)
 		}
 
-		fmt.Printf("%2d) %s%s\n    %s\n    %s\n    %s\n",
-			i+1, c.Title, consensusLabel, c.URL, c.PublishedAt.Format(time.RFC3339), c.Source)
+		fmt.Printf("%2d) %s%s [Rel: %d]\n    %s\n    %s\n    %s\n",
+			i+1, c.Title, consensusLabel, c.RelevanceScore, c.URL, c.PublishedAt.Format(time.RFC3339), c.Source)
 	}
 
 	// 8) Step 7: Fetch + Extract (Python worker) for top N
@@ -253,34 +256,122 @@ func Run() error {
 	if n > len(candidates) {
 		n = len(candidates)
 	}
-	if n == 0 {
-		return nil
+
+	var extractedArticles []extract.Article
+
+	if n > 0 {
+		worker := extract.NewWorker()
+		for i := 0; i < n; i++ {
+			u := candidates[i].URL
+			fmt.Printf("\n[%d/%d] Extracting: %s\n", i+1, n, u)
+
+			art, err := worker.Extract(ctx, u)
+			if err != nil {
+				fmt.Println("  - error:", err)
+				continue
+			}
+
+			extractedArticles = append(extractedArticles, art)
+
+			fmt.Println("  - title:", art.Title)
+			fmt.Println("  - site :", art.Site)
+			if art.Lang != nil {
+				fmt.Println("  - lang :", *art.Lang)
+			}
+			fmt.Printf("  - text : %d chars\n", len(art.Text))
+
+			preview := strings.TrimSpace(art.Text)
+			if len(preview) > 250 {
+				preview = preview[:250] + "..."
+			}
+			if preview != "" {
+				fmt.Println("  - preview:", preview)
+			}
+		}
 	}
 
-	worker := extract.NewWorker()
-	for i := 0; i < n; i++ {
-		u := candidates[i].URL
-		fmt.Printf("\n[%d/%d] Extracting: %s\n", i+1, n, u)
-
-		art, err := worker.Extract(ctx, u)
-		if err != nil {
-			fmt.Println("  - error:", err)
-			continue
+	if len(extractedArticles) > 0 || len(candidates) > 0 {
+		fmt.Println("\nGenerating reports...")
+		if err := generateReports(extractedArticles, candidates); err != nil {
+			fmt.Println("Error generating reports:", err)
+		} else {
+			fmt.Println("Reports generated: articles.docx, scores.docx")
 		}
+	}
 
-		fmt.Println("  - title:", art.Title)
-		fmt.Println("  - site :", art.Site)
-		if art.Lang != nil {
-			fmt.Println("  - lang :", *art.Lang)
-		}
-		fmt.Printf("  - text : %d chars\n", len(art.Text))
+	return nil
+}
 
-		preview := strings.TrimSpace(art.Text)
-		if len(preview) > 250 {
-			preview = preview[:250] + "..."
+func generateReports(articles []extract.Article, candidates []discovery.Candidate) error {
+	// 1. Articles DOCX
+	if len(articles) > 0 {
+		f := docx.NewFile()
+		for _, art := range articles {
+			// Title
+			p := f.AddParagraph()
+			run := p.AddText(art.Title)
+			// run.Bold() // Not supported in this lib version apparently
+			run.Size(16)
+
+			// Metadata
+			p = f.AddParagraph()
+			run = p.AddText(fmt.Sprintf("Source: %s | Date: %s", art.Site, art.PublishedAt))
+			run.Size(10)
+			run.Color("808080")
+
+			// URL
+			p = f.AddParagraph()
+			run = p.AddText(art.FinalURL)
+			// Italic is not directly available on Run in this version, or I need to check docs.
+			// Let's assume AddText returns *Run which might have Italic via a property or method if available.
+			// Checking docs: Run has Color, Size. Does it have Bold? AddParagraph().AddText().Bold() seems valid from snippets online but let's check.
+			// From `go doc`, Run has Color, Size.
+			// Checking Paragraph.AddText returns *Run.
+			// Let's assume standard formatting methods might exist or just stick to basic text.
+			run.Size(10)
+			run.Color("0000FF")
+
+			// Simple text splitting by double newlines for paragraphs
+			paragraphs := strings.Split(art.Text, "\n\n")
+			for _, txt := range paragraphs {
+				txt = strings.TrimSpace(txt)
+				if txt != "" {
+					f.AddParagraph().AddText(txt)
+				}
+			}
+			f.AddParagraph().AddText("--------------------------------------------------")
 		}
-		if preview != "" {
-			fmt.Println("  - preview:", preview)
+		if err := f.Save("articles.docx"); err != nil {
+			return err
+		}
+	}
+
+	// 2. Scores DOCX
+	if len(candidates) > 0 {
+		f := docx.NewFile()
+
+		p := f.AddParagraph()
+		run := p.AddText("Relevance & Consensus Scores")
+		// run.Bold()
+		run.Size(18)
+
+		for _, c := range candidates {
+			p = f.AddParagraph()
+			run = p.AddText(c.Title)
+			// run.Bold()
+
+			p = f.AddParagraph()
+			run = p.AddText(c.URL)
+			run.Size(10)
+
+			p = f.AddParagraph()
+			run = p.AddText(fmt.Sprintf("Relevance Score: %d | Consensus Score: %d", c.RelevanceScore, c.ConsensusScore))
+			run.Color("008000")
+
+			f.AddParagraph() // Spacer
+		}
+		if err := f.Save("scores.docx"); err != nil {
+			return err
 		}
 	}
 
@@ -669,6 +760,8 @@ func filterCandidates(candidates []discovery.Candidate, query string, intent Int
 
 		// Threshold: at least one keyword match or very strong other signals
 		if score > 0 {
+			// Update the candidate's score
+			c.RelevanceScore = score
 			scoredCandidates = append(scoredCandidates, scored{c, score})
 		}
 	}
