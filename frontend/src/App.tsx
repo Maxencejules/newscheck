@@ -92,6 +92,15 @@ function App() {
         setSelectedUrls(next);
     };
 
+    const handleSelectAll = () => {
+        const all = new Set(candidates.map(c => c.url));
+        setSelectedUrls(all);
+    };
+
+    const handleClearSelection = () => {
+        setSelectedUrls(new Set());
+    };
+
     const handleExtract = async () => {
         if (selectedUrls.size === 0) return;
         setLoading(true);

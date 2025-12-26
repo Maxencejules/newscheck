@@ -63,10 +63,10 @@ type SearchRequest struct {
 }
 
 type SearchResult struct {
-	Candidates []discovery.Candidate
-	Intent     Intent
-	Plans      []SearchPlan
-	Targets    []geo.DiscoveryTarget
+	Candidates []discovery.Candidate `json:"Candidates"`
+	Intent     Intent                `json:"Intent"`
+	Plans      []SearchPlan          `json:"Plans"`
+	Targets    []geo.DiscoveryTarget `json:"Targets"`
 }
 
 func (s *Service) Search(ctx context.Context, req SearchRequest) (*SearchResult, error) {
