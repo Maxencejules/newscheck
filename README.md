@@ -18,6 +18,14 @@ Open your terminal and run:
 go install github.com/wailsapp/wails/v2/cmd/wails@latest
 ```
 
+> **Troubleshooting Windows:** If you see `wails : The term 'wails' is not recognized`, your Go bin directory is missing from your PATH.
+>
+> **Quick Fix (Current Session):**
+> ```powershell
+> $env:PATH += ";$env:USERPROFILE\go\bin"
+> ```
+> **Permanent Fix:** Add `%USERPROFILE%\go\bin` to your User PATH environment variable in Windows System Properties.
+
 ### 3. Setup Dependencies
 Run these commands in the project root to install the necessary libraries:
 
